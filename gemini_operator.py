@@ -3,6 +3,9 @@
 gemini-operator: A command-line tool powered by Gemini that converts natural
 language prompts into OS-specific shell commands, explains what they will do,
 and asks for confirmation before executing them.
+
+gemini-operator：以 Gemini 將自然語言轉成符合目前作業系統的 shell 指令、說明
+其效果與副作用，並在執行前請使用者確認的指令列工具。
 """
 
 import getpass
@@ -15,7 +18,7 @@ import sys
 import google.generativeai as genai
 from google.api_core import exceptions as google_api_exceptions
 
-# ─── ANSI colour helpers ────────────────────────────────────────────────────
+# ─── ANSI colour helpers / ANSI 色彩輔助 ────────────────────────────────────
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -27,16 +30,22 @@ MAGENTA = "\033[35m"
 
 
 def _colour(text: str, *codes: str) -> str:
-    """Wrap *text* in the given ANSI codes when stdout is a TTY."""
+    """
+    Wrap *text* in the given ANSI codes when stdout is a TTY.
+    僅在標準輸出為終端機（TTY）時，為 *text* 套用指定的 ANSI 轉義序列。
+    """
     if sys.stdout.isatty():
         return "".join(codes) + text + RESET
     return text
 
 
-# ─── OS detection ───────────────────────────────────────────────────────────
+# ─── OS detection / 作業系統偵測 ───────────────────────────────────────────
 
 def detect_os() -> str:
-    """Return a normalised OS identifier: 'windows', 'macos', or 'linux'."""
+    """
+    Return a normalised OS identifier: 'windows', 'macos', or 'linux'.
+    回傳正規化後的作業系統代碼：'windows'、'macos' 或 'linux'。
+    """
     system = platform.system().lower()
     if system == "windows":
         return "windows"
@@ -45,23 +54,28 @@ def detect_os() -> str:
     return "linux"
 
 
+# Human-readable OS labels for the banner / 啟動橫幅上顯示的作業系統說明文字
 OS_DISPLAY = {
     "windows": "Windows (cmd)",
     "macos": "macOS (bash/zsh)",
     "linux": "Linux (bash)",
 }
 
+# Wording injected into the model system prompt / 寫入模型系統提示的 shell 描述
 OS_SHELL_NAME = {
     "windows": "Windows Command Prompt (cmd.exe)",
     "macos": "macOS bash/zsh shell",
     "linux": "Linux bash shell",
 }
 
-# ─── Gemini integration ─────────────────────────────────────────────────────
+# ─── Gemini integration / Gemini 整合 ───────────────────────────────────────
 
-# Default when GEMINI_MODEL is unset: interactive picker uses Enter for this id.
+# Default when GEMINI_MODEL is unset; Enter in the picker selects this id.
+# 未設定 GEMINI_MODEL 時的預設值；互動選單中按 Enter 會選此模型 ID。
 DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
 
+# System instruction for JSON {command, explanation}; keep English for the model.
+# 要求模型輸出 JSON（command、explanation）；內文維持英文以利模型遵循。
 SYSTEM_PROMPT_TEMPLATE = """\
 You are a command-line expert.  The user is running {os_display}.
 
@@ -86,6 +100,10 @@ Rules:
 def build_model(
     api_key: str, current_os: str, model_name: str
 ) -> genai.GenerativeModel:
+    """
+    Configure the SDK and return a GenerativeModel with the OS-specific system prompt.
+    設定 SDK，並回傳已套用依作業系統客製化系統提示詞的 GenerativeModel。
+    """
     genai.configure(api_key=api_key)
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         os_display=OS_SHELL_NAME[current_os]
@@ -97,13 +115,15 @@ def build_model(
 
 
 def _model_id_from_list_name(name: str) -> str:
+    """Strip the ``models/`` prefix from API list names. / 移除 API 列舉名稱的 ``models/`` 前綴。"""
     return name.removeprefix("models/")
 
 
 def fetch_models_via_sdk(api_key: str) -> list[str]:
     """
-    All model ids reported by ``google.generativeai.list_models()`` for this key
-    that advertise the ``generateContent`` method (SDK-dynamic list).
+    All model ids from ``google.generativeai.list_models()`` for this key that
+    advertise ``generateContent`` (SDK-dynamic list).
+    以 ``list_models()`` 動態取得此 API 金鑰可用、且支援 ``generateContent`` 的模型 ID。
     """
     genai.configure(api_key=api_key)
     found: list[str] = []
@@ -121,7 +141,10 @@ def fetch_models_via_sdk(api_key: str) -> list[str]:
 
 
 def resolve_api_key() -> str:
-    """Environment GEMINI_API_KEY, else prompt (hidden input)."""
+    """
+    Read GEMINI_API_KEY from the environment, else prompt (hidden input).
+    優先讀取環境變數 GEMINI_API_KEY；若無則以隱藏輸入提示貼上金鑰。
+    """
     key = os.environ.get("GEMINI_API_KEY", "").strip()
     if key:
         return key
@@ -148,9 +171,11 @@ def resolve_api_key() -> str:
 
 def select_model_interactive(eligible: list[str], default_id: str) -> str:
     """
-    Numbered menu over *eligible*. Empty input selects *default_id*.
+    Numbered menu over *eligible*; empty input selects *default_id*.
+    以編號選單從 *eligible* 選模型；空白輸入則選 *default_id*。
     """
     # Default first, then remaining ids alphabetically (no duplicate of default).
+    # 預設模型置頂，其餘依字母排序（避免預設重複出現）。
     rest = sorted(m for m in eligible if m != default_id)
     ordered = [default_id] + rest
 
@@ -207,7 +232,10 @@ def select_model_interactive(eligible: list[str], default_id: str) -> str:
 
 
 def resolve_model_name(api_key: str) -> str:
-    """GEMINI_MODEL env if set; otherwise list_models() via SDK and prompt."""
+    """
+    Use GEMINI_MODEL if set; otherwise list_models() via the SDK and prompt.
+    若已設定 GEMINI_MODEL 則直接使用；否則透過 SDK 列舉並互動選擇。
+    """
     env_model = os.environ.get("GEMINI_MODEL", "").strip()
     if env_model:
         return env_model
@@ -221,11 +249,14 @@ def ask_gemini(model: genai.GenerativeModel, prompt: str) -> tuple[str, str]:
     Return (command, explanation) parsed from the Gemini response.
     Raises ValueError if the response cannot be parsed.
     Raises google.api_core.exceptions.GoogleAPIError for API-level failures.
+    從 Gemini 回應解析並回傳 (指令, 說明)。無法解析時拋出 ValueError；
+    API 層級錯誤則為 GoogleAPIError。
     """
     response = model.generate_content(prompt)
     raw = response.text.strip()
 
-    # Strip markdown code fences if the model adds them despite instructions.
+    # Strip markdown fences if the model adds them despite instructions.
+    # 若模型仍輸出 markdown 程式碼區塊，於此剝除包圍的 ```。
     if raw.startswith("```"):
         lines = raw.splitlines()
         raw = "\n".join(
@@ -248,10 +279,13 @@ def ask_gemini(model: genai.GenerativeModel, prompt: str) -> tuple[str, str]:
     return command, explanation
 
 
-# ─── Command execution ───────────────────────────────────────────────────────
+# ─── Command execution / 指令執行 ─────────────────────────────────────────
 
 def run_command(command: str, current_os: str) -> int:
-    """Execute *command* in the appropriate shell; return the exit code."""
+    """
+    Execute *command* in the appropriate shell; return the exit code.
+    在對應 shell 執行 *command*，並回傳結束代碼。
+    """
     if current_os == "windows":
         result = subprocess.run(["cmd.exe", "/C", command])
     else:
@@ -259,7 +293,7 @@ def run_command(command: str, current_os: str) -> int:
     return result.returncode
 
 
-# ─── Interactive loop ────────────────────────────────────────────────────────
+# ─── Interactive loop / 互動主迴圈 ─────────────────────────────────────────
 
 BANNER = """\
 ╔══════════════════════════════════════════════════════════════════╗
@@ -271,6 +305,7 @@ Commands: 'exit' or 'quit' to leave, Ctrl-C to cancel at any time.
 
 
 def print_banner(current_os: str, model_name: str) -> None:
+    """Print startup banner, detected OS, and model name. / 顯示啟動橫幅、偵測到的 OS 與模型名稱。"""
     print(_colour(BANNER, CYAN, BOLD))
     print(
         _colour("Detected OS: ", BOLD)
@@ -287,6 +322,7 @@ def prompt_user_action(command: str) -> str:
     """
     Show the command to the user and ask what to do.
     Returns the (possibly edited) command to run, or '' to cancel.
+    顯示指令並詢問動作；回傳要執行的指令（可經編輯），取消則回傳空字串。
     """
     print()
     print(_colour("┌─ Command to execute " + "─" * 45, CYAN))
@@ -326,7 +362,7 @@ def prompt_user_action(command: str) -> str:
 
 
 def main() -> None:
-    # ── API key ──────────────────────────────────────────────────────────────
+    # ── API key / API 金鑰 ───────────────────────────────────────────────────
     api_key = resolve_api_key()
     current_os = detect_os()
 
@@ -363,7 +399,7 @@ def main() -> None:
 
     print_banner(current_os, selected_model)
 
-    # ── Main REPL ─────────────────────────────────────────────────────────────
+    # ── Main REPL / 主讀取–求值迴圈 ─────────────────────────────────────────
     while True:
         try:
             user_input = input(_colour("gemini-operator> ", MAGENTA, BOLD)).strip()
@@ -378,7 +414,7 @@ def main() -> None:
             print(_colour("Goodbye!", CYAN))
             break
 
-        # ── Ask Gemini ───────────────────────────────────────────────────────
+        # ── Ask Gemini / 呼叫 Gemini ───────────────────────────────────────────
         print(_colour("⏳ Thinking…", CYAN))
         try:
             command, explanation = ask_gemini(model, user_input)
@@ -398,12 +434,12 @@ def main() -> None:
             print(_colour(f"Unexpected error: {exc}", RED))
             continue
 
-        # ── Display explanation ──────────────────────────────────────────────
+        # ── Display explanation / 顯示說明 ─────────────────────────────────────
         print()
         print(_colour("ℹ  Explanation:", BOLD))
         print(f"   {explanation}")
 
-        # ── Confirm & execute ────────────────────────────────────────────────
+        # ── Confirm & execute / 確認並執行 ───────────────────────────────────
         final_command = prompt_user_action(command)
 
         if not final_command:
