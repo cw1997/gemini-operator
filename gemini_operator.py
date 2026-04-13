@@ -5,6 +5,7 @@ language prompts into OS-specific shell commands, explains what they will do,
 and asks for confirmation before executing them.
 """
 
+import getpass
 import json
 import os
 import platform
@@ -58,17 +59,8 @@ OS_SHELL_NAME = {
 
 # ─── Gemini integration ─────────────────────────────────────────────────────
 
-# Default: Gemini 3 Flash — flagship Flash tier (see Gemini API models docs).
-DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
-
-# Curated presets for the interactive picker (model_id, short label).
-GEMINI_MODEL_PRESETS: list[tuple[str, str]] = [
-    (DEFAULT_GEMINI_MODEL, "Gemini 3 Flash (default, strongest Flash)"),
-    ("gemini-2.5-flash", "Gemini 2.5 Flash (stable)"),
-    ("gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite (faster / cheaper)"),
-    ("gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash-Lite (preview)"),
-    ("gemini-3.1-flash", "Gemini 3.1 Flash (if available on your key)"),
-]
+# Default when GEMINI_MODEL is unset: interactive picker uses Enter for this id.
+DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
 
 SYSTEM_PROMPT_TEMPLATE = """\
 You are a command-line expert.  The user is running {os_display}.
@@ -104,61 +96,124 @@ def build_model(
     )
 
 
-def select_gemini_model() -> str:
+def _model_id_from_list_name(name: str) -> str:
+    return name.removeprefix("models/")
+
+
+def fetch_models_via_sdk(api_key: str) -> list[str]:
     """
-    Prompt the user to pick a model before the REPL starts.
-    Empty input selects DEFAULT_GEMINI_MODEL.
+    All model ids reported by ``google.generativeai.list_models()`` for this key
+    that advertise the ``generateContent`` method (SDK-dynamic list).
     """
-    n_presets = len(GEMINI_MODEL_PRESETS)
-    custom_idx = n_presets + 1
+    genai.configure(api_key=api_key)
+    found: list[str] = []
+    for m in genai.list_models():
+        methods = getattr(m, "supported_generation_methods", None) or []
+        if "generateContent" not in methods:
+            continue
+        found.append(_model_id_from_list_name(m.name))
+
+    if not found:
+        raise RuntimeError(
+            "list_models() returned no models with generateContent for this key."
+        )
+    return sorted(set(found))
+
+
+def resolve_api_key() -> str:
+    """Environment GEMINI_API_KEY, else prompt (hidden input)."""
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if key:
+        return key
 
     print()
-    print(_colour("Select Gemini model (Enter = default):", BOLD))
-    for i, (model_id, label) in enumerate(GEMINI_MODEL_PRESETS, start=1):
-        default_mark = (
-            " " + _colour("[default]", GREEN, BOLD)
-            if model_id == DEFAULT_GEMINI_MODEL
+    print(
+        _colour(
+            "GEMINI_API_KEY is not set. Paste your Gemini API key "
+            "(create one at https://aistudio.google.com/apikey ).",
+            YELLOW,
+            BOLD,
+        )
+    )
+    while True:
+        try:
+            key = getpass.getpass("API key: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(0)
+        if key:
+            return key
+        print(_colour("Key cannot be empty.", RED))
+
+
+def select_model_interactive(eligible: list[str], default_id: str) -> str:
+    """
+    Numbered menu over *eligible*. Empty input selects *default_id*.
+    """
+    # Default first, then remaining ids alphabetically (no duplicate of default).
+    rest = sorted(m for m in eligible if m != default_id)
+    ordered = [default_id] + rest
+
+    print()
+    print(
+        _colour(
+            "GEMINI_MODEL is not set. Choose a model (from genai.list_models() "
+            "for this key):",
+            BOLD,
+        )
+    )
+    if default_id not in eligible:
+        print(
+            _colour(
+                f"Note: default {default_id!r} was not returned by the API for "
+                "this key; Enter still selects it.",
+                YELLOW,
+            )
+        )
+
+    for i, model_id in enumerate(ordered, start=1):
+        mark = (
+            " " + _colour("[default on Enter]", GREEN, BOLD)
+            if model_id == default_id
             else ""
         )
-        print(
-            f"  {i}. {_colour(label, CYAN)}{default_mark} "
-            + _colour(f"({model_id})", MAGENTA)
-        )
-    print(f"  {custom_idx}. {_colour('Custom model ID…', YELLOW)}")
+        print(f"  {i}. {_colour(model_id, CYAN)}{mark}")
 
+    n = len(ordered)
     while True:
-        prompt = (
-            f"Choice [1-{custom_idx} or Enter for {DEFAULT_GEMINI_MODEL}]: "
-        )
         try:
-            raw = input(_colour(prompt, BOLD)).strip()
+            raw = input(
+                _colour(
+                    f"Choice [1-{n}, Enter = {default_id}]: ",
+                    BOLD,
+                )
+            ).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             sys.exit(0)
 
         if raw == "":
-            return DEFAULT_GEMINI_MODEL
+            return default_id
 
         if not raw.isdigit():
-            print(_colour("Please enter a number, or press Enter for the default.", RED))
+            print(_colour("Enter a number, or press Enter for the default.", RED))
             continue
 
         choice = int(raw)
-        if 1 <= choice <= n_presets:
-            return GEMINI_MODEL_PRESETS[choice - 1][0]
+        if 1 <= choice <= n:
+            return ordered[choice - 1]
 
-        if choice == custom_idx:
-            try:
-                custom = input(_colour("Model ID: ", BOLD)).strip()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                sys.exit(0)
-            if custom:
-                return custom
-            print(_colour("Empty model ID; try again.", RED))
-            continue
+        print(_colour(f"Pick a number from 1 to {n}.", RED))
 
-        print(_colour(f"Enter a number from 1 to {custom_idx}.", RED))
+
+def resolve_model_name(api_key: str) -> str:
+    """GEMINI_MODEL env if set; otherwise list_models() via SDK and prompt."""
+    env_model = os.environ.get("GEMINI_MODEL", "").strip()
+    if env_model:
+        return env_model
+
+    eligible = fetch_models_via_sdk(api_key)
+    return select_model_interactive(eligible, DEFAULT_GEMINI_MODEL)
 
 
 def ask_gemini(model: genai.GenerativeModel, prompt: str) -> tuple[str, str]:
@@ -272,20 +327,27 @@ def prompt_user_action(command: str) -> str:
 
 def main() -> None:
     # ── API key ──────────────────────────────────────────────────────────────
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
+    api_key = resolve_api_key()
+    current_os = detect_os()
+
+    try:
+        selected_model = resolve_model_name(api_key)
+    except google_api_exceptions.PermissionDenied:
         print(
             _colour(
-                "Error: GEMINI_API_KEY environment variable is not set.\n"
-                "Set it with:  export GEMINI_API_KEY=<your-key>",
+                "Error: invalid API key while listing models (PermissionDenied). "
+                "Check your GEMINI_API_KEY or pasted key.",
                 RED,
                 BOLD,
             )
         )
         sys.exit(1)
-
-    current_os = detect_os()
-    selected_model = select_gemini_model()
+    except google_api_exceptions.GoogleAPIError as exc:
+        print(_colour(f"API error while listing models: {exc}", RED))
+        sys.exit(1)
+    except (OSError, RuntimeError) as exc:
+        print(_colour(f"Could not list models: {exc}", RED))
+        sys.exit(1)
 
     try:
         model = build_model(api_key, current_os, selected_model)
