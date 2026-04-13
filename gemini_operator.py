@@ -130,7 +130,7 @@ def resolve_api_key() -> str:
     print(
         _colour(
             "GEMINI_API_KEY is not set. Paste your Gemini API key "
-            "(create one at https://aistudio.google.com/apikey ).",
+            "(https://aistudio.google.com/api-keys ).",
             YELLOW,
             BOLD,
         )
