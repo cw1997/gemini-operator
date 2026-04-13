@@ -19,7 +19,17 @@ Describe a task in plain language and gemini-operator will:
 
 ---
 
+## Clone the repository
+```bash
+git clone https://github.com/cw1997/gemini-operator.git
+```
+
 ## Setup
+
+### 0. Set up a virtual environment
+```bash
+sudo apt update && sudo apt install -y python3-venv python3-full && python3 -m venv .venv && source .venv/bin/activate
+```
 
 ### 1. Install dependencies
 
