@@ -58,6 +58,18 @@ OS_SHELL_NAME = {
 
 # ─── Gemini integration ─────────────────────────────────────────────────────
 
+# Default: Gemini 3 Flash — flagship Flash tier (see Gemini API models docs).
+DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
+
+# Curated presets for the interactive picker (model_id, short label).
+GEMINI_MODEL_PRESETS: list[tuple[str, str]] = [
+    (DEFAULT_GEMINI_MODEL, "Gemini 3 Flash (default, strongest Flash)"),
+    ("gemini-2.5-flash", "Gemini 2.5 Flash (stable)"),
+    ("gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite (faster / cheaper)"),
+    ("gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash-Lite (preview)"),
+    ("gemini-3.1-flash", "Gemini 3.1 Flash (if available on your key)"),
+]
+
 SYSTEM_PROMPT_TEMPLATE = """\
 You are a command-line expert.  The user is running {os_display}.
 
@@ -79,15 +91,74 @@ Rules:
 """
 
 
-def build_model(api_key: str, current_os: str) -> genai.GenerativeModel:
+def build_model(
+    api_key: str, current_os: str, model_name: str
+) -> genai.GenerativeModel:
     genai.configure(api_key=api_key)
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         os_display=OS_SHELL_NAME[current_os]
     )
     return genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
+        model_name=model_name,
         system_instruction=system_prompt,
     )
+
+
+def select_gemini_model() -> str:
+    """
+    Prompt the user to pick a model before the REPL starts.
+    Empty input selects DEFAULT_GEMINI_MODEL.
+    """
+    n_presets = len(GEMINI_MODEL_PRESETS)
+    custom_idx = n_presets + 1
+
+    print()
+    print(_colour("Select Gemini model (Enter = default):", BOLD))
+    for i, (model_id, label) in enumerate(GEMINI_MODEL_PRESETS, start=1):
+        default_mark = (
+            " " + _colour("[default]", GREEN, BOLD)
+            if model_id == DEFAULT_GEMINI_MODEL
+            else ""
+        )
+        print(
+            f"  {i}. {_colour(label, CYAN)}{default_mark} "
+            + _colour(f"({model_id})", MAGENTA)
+        )
+    print(f"  {custom_idx}. {_colour('Custom model ID…', YELLOW)}")
+
+    while True:
+        prompt = (
+            f"Choice [1-{custom_idx} or Enter for {DEFAULT_GEMINI_MODEL}]: "
+        )
+        try:
+            raw = input(_colour(prompt, BOLD)).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(0)
+
+        if raw == "":
+            return DEFAULT_GEMINI_MODEL
+
+        if not raw.isdigit():
+            print(_colour("Please enter a number, or press Enter for the default.", RED))
+            continue
+
+        choice = int(raw)
+        if 1 <= choice <= n_presets:
+            return GEMINI_MODEL_PRESETS[choice - 1][0]
+
+        if choice == custom_idx:
+            try:
+                custom = input(_colour("Model ID: ", BOLD)).strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                sys.exit(0)
+            if custom:
+                return custom
+            print(_colour("Empty model ID; try again.", RED))
+            continue
+
+        print(_colour(f"Enter a number from 1 to {custom_idx}.", RED))
 
 
 def ask_gemini(model: genai.GenerativeModel, prompt: str) -> tuple[str, str]:
@@ -144,11 +215,15 @@ Commands: 'exit' or 'quit' to leave, Ctrl-C to cancel at any time.
 """
 
 
-def print_banner(current_os: str) -> None:
+def print_banner(current_os: str, model_name: str) -> None:
     print(_colour(BANNER, CYAN, BOLD))
     print(
         _colour("Detected OS: ", BOLD)
         + _colour(OS_DISPLAY[current_os], GREEN, BOLD)
+    )
+    print(
+        _colour("Model: ", BOLD)
+        + _colour(model_name, GREEN, BOLD)
         + "\n"
     )
 
@@ -210,9 +285,10 @@ def main() -> None:
         sys.exit(1)
 
     current_os = detect_os()
+    selected_model = select_gemini_model()
 
     try:
-        model = build_model(api_key, current_os)
+        model = build_model(api_key, current_os, selected_model)
     except google_api_exceptions.PermissionDenied:
         print(_colour("Error: invalid API key (PermissionDenied). Check GEMINI_API_KEY.", RED, BOLD))
         sys.exit(1)
@@ -223,7 +299,7 @@ def main() -> None:
         print(_colour(f"Failed to initialise Gemini model: {exc}", RED))
         sys.exit(1)
 
-    print_banner(current_os)
+    print_banner(current_os, selected_model)
 
     # ── Main REPL ─────────────────────────────────────────────────────────────
     while True:
